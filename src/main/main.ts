@@ -3684,7 +3684,7 @@ async function startSpeakFromSelection(): Promise<boolean> {
                   voice: speakRuntimeOptions.voice,
                   lang,
                   rate: speakRuntimeOptions.rate,
-                  saveSubtitles: true,
+                  saveSubtitles: false,
                   timeoutMs: 45000,
                 })
               : synthesizeWithSystemSay({

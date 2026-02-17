@@ -16,7 +16,7 @@
  *   3. Run npm install --production
  */
 
-import { app } from 'electron';
+import { app, dialog } from 'electron';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
@@ -98,10 +98,10 @@ function resolveGitExecutable(): string | null {
   const home = os.homedir();
   const candidates = [
     String(process.env.GIT || '').trim(),
-    '/usr/bin/git',
     '/opt/homebrew/bin/git',
     '/usr/local/bin/git',
     path.join(home, '.volta', 'bin', 'git'),
+    '/usr/bin/git',
   ].filter(Boolean);
 
   for (const candidate of candidates) {
@@ -110,6 +110,122 @@ function resolveGitExecutable(): string | null {
     } catch {}
   }
   return null;
+}
+
+function resolveBrewExecutable(): string | null {
+  const home = os.homedir();
+  const candidates = [
+    String(process.env.HOMEBREW_BIN || '').trim(),
+    '/opt/homebrew/bin/brew',
+    '/usr/local/bin/brew',
+    path.join(home, '.linuxbrew', 'bin', 'brew'),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {}
+  }
+  return null;
+}
+
+function isDeveloperToolsGitError(error: any): boolean {
+  const text = `${String(error?.message || '')}\n${String(error?.stderr || '')}`.toLowerCase();
+  return (
+    text.includes('xcode-select') ||
+    text.includes('no developer tools were found') ||
+    text.includes('xcrun: error') ||
+    text.includes('unable to find utility "git"')
+  );
+}
+
+let brewGitInstallPromise: Promise<void> | null = null;
+let brewGitInstalled = false;
+let gitSetupDialogPromise: Promise<void> | null = null;
+
+async function showGitSetupDialog(
+  message: string,
+  detail: string
+): Promise<void> {
+  if (gitSetupDialogPromise) {
+    await gitSetupDialogPromise;
+    return;
+  }
+  gitSetupDialogPromise = (async () => {
+    try {
+      const result = await dialog.showMessageBox({
+        type: 'warning',
+        buttons: ['Quit SuperCmd', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+        title: 'Git Setup Required',
+        message,
+        detail,
+      });
+      if (result.response === 0) {
+        app.quit();
+      }
+    } catch (error) {
+      console.error('Failed to show Git setup dialog:', error);
+    }
+  })();
+  try {
+    await gitSetupDialogPromise;
+  } finally {
+    gitSetupDialogPromise = null;
+  }
+}
+
+async function ensureGitInstalledWithBrew(): Promise<void> {
+  if (brewGitInstalled) return;
+  if (brewGitInstallPromise) {
+    await brewGitInstallPromise;
+    return;
+  }
+
+  brewGitInstallPromise = (async () => {
+    const brewExecutable = resolveBrewExecutable();
+    if (!brewExecutable) {
+      await showGitSetupDialog(
+        'Git is required to install extensions.',
+        'Homebrew was not found on this Mac.\n\nInstall Homebrew first:\n/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\n\nThen reopen SuperCmd and try again.'
+      );
+      throw new Error('Git setup required: Homebrew is not installed.');
+    }
+    const brewBinDir = path.dirname(brewExecutable);
+    try {
+      await execAsync(
+        `"${brewExecutable}" list --versions git >/dev/null 2>&1 || "${brewExecutable}" install git`,
+        {
+          timeout: 15 * 60_000,
+          maxBuffer: 10 * 1024 * 1024,
+          env: {
+            ...process.env,
+            PATH: buildExecutablePath(brewBinDir),
+          },
+        }
+      );
+    } catch (error) {
+      await showGitSetupDialog(
+        'Git is required to install extensions.',
+        `Automatic Git install failed.\n\nRun this command in Terminal:\n"${brewExecutable}" install git\n\nThen quit and reopen SuperCmd and try again.`
+      );
+      throw new Error('Git setup required: automatic brew install failed.');
+    }
+    brewGitInstalled = true;
+    await showGitSetupDialog(
+      'Git has been installed.',
+      'Please quit and reopen SuperCmd, then try installing extensions again.'
+    );
+    throw new Error('Git was installed. Restart SuperCmd and retry.');
+  })();
+
+  try {
+    await brewGitInstallPromise;
+  } finally {
+    brewGitInstallPromise = null;
+  }
 }
 
 async function runNpmCommand(extPath: string, args: string, timeoutMs: number): Promise<void> {
@@ -156,36 +272,35 @@ async function runNpmCommand(extPath: string, args: string, timeoutMs: number): 
 }
 
 async function runGitCommand(cwd: string, args: string, timeoutMs: number): Promise<void> {
-  const gitExecutable = resolveGitExecutable();
-  if (gitExecutable) {
-    try {
-      await execAsync(`"${gitExecutable}" ${args}`, {
-        cwd,
-        timeout: timeoutMs,
-        maxBuffer: 10 * 1024 * 1024,
-        env: {
-          ...process.env,
-          PATH: buildExecutablePath(path.dirname(gitExecutable)),
-        },
-      });
-      return;
-    } catch (error: any) {
-      const message = String(error?.message || '');
-      if (!/not found|ENOENT/i.test(message)) {
-        throw error;
-      }
+  const runWithResolvedGit = async (): Promise<void> => {
+    const gitExecutable = resolveGitExecutable();
+    if (!gitExecutable) {
+      throw new Error('git executable was not found');
+    }
+    await execAsync(`"${gitExecutable}" ${args}`, {
+      cwd,
+      timeout: timeoutMs,
+      maxBuffer: 10 * 1024 * 1024,
+      env: {
+        ...process.env,
+        PATH: buildExecutablePath(path.dirname(gitExecutable)),
+      },
+    });
+  };
+
+  try {
+    await runWithResolvedGit();
+    return;
+  } catch (error: any) {
+    const message = String(error?.message || '');
+    const missingGit = /not found|enoent/i.test(message);
+    if (!missingGit && !isDeveloperToolsGitError(error)) {
+      throw error;
     }
   }
 
-  const script = `cd ${shellQuoteSingle(cwd)} && git ${args}`;
-  await execAsync(`/bin/zsh -ilc ${shellQuoteSingle(script)}`, {
-    timeout: timeoutMs,
-    maxBuffer: 10 * 1024 * 1024,
-    env: {
-      ...process.env,
-      PATH: buildExecutablePath(),
-    },
-  });
+  await ensureGitInstalledWithBrew();
+  throw new Error('Git setup required. Quit and reopen SuperCmd, then try again.');
 }
 
 function hasNodeModules(extPath: string): boolean {
@@ -201,6 +316,264 @@ const GITHUB_RAW =
   'https://raw.githubusercontent.com/raycast/extensions/main';
 const GITHUB_API =
   'https://api.github.com/repos/raycast/extensions/contents';
+const GITHUB_TREE_API =
+  'https://api.github.com/repos/raycast/extensions/git/trees/main?recursive=1';
+
+type RepoTreeEntry = {
+  path: string;
+  type: 'blob' | 'tree' | string;
+  size?: number;
+};
+type RepoTreeCache = {
+  fetchedAt: number;
+  entries: RepoTreeEntry[];
+};
+const REPO_TREE_TTL_MS = 10 * 60 * 1000;
+let repoTreeCache: RepoTreeCache | null = null;
+
+function shouldUseNetworkFallback(error: any): boolean {
+  const text = `${String(error?.message || '')}\n${String(error?.stderr || '')}`.toLowerCase();
+  return (
+    text.includes('homebrew was not found') ||
+    text.includes('git executable was not found') ||
+    text.includes('xcode-select') ||
+    text.includes('no developer tools were found') ||
+    text.includes('unable to find utility "git"') ||
+    /enoent|not found/.test(text)
+  );
+}
+
+function githubApiHeaders(): Record<string, string> {
+  return {
+    'User-Agent': 'SuperCmd',
+    Accept: 'application/vnd.github+json',
+  };
+}
+
+async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 45_000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchRepoTreeEntries(forceRefresh = false): Promise<RepoTreeEntry[]> {
+  if (
+    !forceRefresh &&
+    repoTreeCache &&
+    Date.now() - repoTreeCache.fetchedAt < REPO_TREE_TTL_MS
+  ) {
+    return repoTreeCache.entries;
+  }
+
+  const response = await fetchWithTimeout(
+    GITHUB_TREE_API,
+    { headers: githubApiHeaders() },
+    90_000
+  );
+  if (!response.ok) {
+    throw new Error(`GitHub tree fetch failed with ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const rawEntries = Array.isArray(data?.tree) ? data.tree : [];
+  const entries: RepoTreeEntry[] = rawEntries
+    .map((entry: any) => ({
+      path: String(entry?.path || ''),
+      type: String(entry?.type || ''),
+      size: typeof entry?.size === 'number' ? entry.size : undefined,
+    }))
+    .filter((entry: RepoTreeEntry) => Boolean(entry.path));
+
+  repoTreeCache = {
+    fetchedAt: Date.now(),
+    entries,
+  };
+  return entries;
+}
+
+function readCatalogEntriesFromExtensionsDir(extensionsDir: string): CatalogEntry[] {
+  const dirs = fs.readdirSync(extensionsDir);
+  const entries: CatalogEntry[] = [];
+
+  for (const dir of dirs) {
+    const pkgPath = path.join(extensionsDir, dir, 'package.json');
+    if (!fs.existsSync(pkgPath)) continue;
+
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+
+      const toAssetUrl = (value: string): string => {
+        if (!value) return '';
+        if (/^https?:\/\//i.test(value)) return value;
+        const normalized = value.replace(/^\.?\//, '');
+        if (normalized.startsWith('extensions/')) {
+          return `${GITHUB_RAW}/${normalized}`;
+        }
+        return `${GITHUB_RAW}/extensions/${dir}/${normalized}`;
+      };
+
+      const iconFile = pkg.icon || 'assets/icon.png';
+      const iconUrl = toAssetUrl(
+        iconFile.includes('/') ? iconFile : `assets/${iconFile}`
+      );
+
+      const commands = (pkg.commands || []).map((c: any) => ({
+        name: c.name || '',
+        title: c.title || '',
+        description: c.description || '',
+      }));
+      const platforms = getManifestPlatforms(pkg);
+      if (!isManifestPlatformCompatible(pkg)) {
+        continue;
+      }
+
+      const normalizePerson = (p: any): string | null => {
+        if (!p) return null;
+        if (typeof p === 'string') {
+          const cleaned = p.split('<')[0].split('(')[0].trim();
+          return cleaned || null;
+        }
+        if (typeof p === 'object') {
+          const name = typeof p.name === 'string' ? p.name.trim() : '';
+          return name || null;
+        }
+        return null;
+      };
+
+      const contributors: string[] = [];
+      const addContributor = (name: string | null) => {
+        if (!name) return;
+        if (!contributors.includes(name)) contributors.push(name);
+      };
+
+      addContributor(normalizePerson(pkg.author));
+      if (Array.isArray(pkg.contributors)) {
+        for (const person of pkg.contributors) {
+          addContributor(normalizePerson(person));
+        }
+      }
+
+      const authorName = normalizePerson(pkg.author) || '';
+      const screenshotUrlsFromPackage: string[] = Array.isArray(pkg.screenshots)
+        ? pkg.screenshots
+            .map((entry: any) => {
+              if (typeof entry === 'string') return toAssetUrl(entry);
+              if (entry && typeof entry === 'object') {
+                if (typeof entry.path === 'string') return toAssetUrl(entry.path);
+                if (typeof entry.src === 'string') return toAssetUrl(entry.src);
+                if (typeof entry.url === 'string') return toAssetUrl(entry.url);
+              }
+              return '';
+            })
+            .filter(Boolean)
+        : [];
+
+      const screenshotUrls = screenshotUrlsFromPackage;
+
+      entries.push({
+        name: dir,
+        title: pkg.title || dir,
+        description: pkg.description || '',
+        author: authorName,
+        contributors,
+        icon: iconFile,
+        iconUrl,
+        screenshotUrls,
+        categories: pkg.categories || [],
+        platforms,
+        commands,
+      });
+    } catch {
+      // Skip malformed package.json
+    }
+  }
+
+  entries.sort((a, b) => a.title.localeCompare(b.title));
+  return entries;
+}
+
+function buildLightweightCatalogFromTree(
+  treeEntries: RepoTreeEntry[],
+  previousEntries: CatalogEntry[] = []
+): CatalogEntry[] {
+  const previousByName = new Map<string, CatalogEntry>();
+  for (const entry of previousEntries) {
+    previousByName.set(entry.name, entry);
+  }
+
+  const extensionNames = new Set<string>();
+  for (const entry of treeEntries) {
+    const match = /^extensions\/([^/]+)\/package\.json$/.exec(entry.path);
+    if (match) extensionNames.add(match[1]);
+  }
+
+  const result: CatalogEntry[] = Array.from(extensionNames).map((name) => {
+    const previous = previousByName.get(name);
+    const fallbackTitle = name.replace(/[-_]+/g, ' ');
+    return {
+      name,
+      title: previous?.title || fallbackTitle || name,
+      description: previous?.description || '',
+      author: previous?.author || '',
+      contributors: previous?.contributors || [],
+      icon: previous?.icon || 'assets/icon.png',
+      iconUrl: previous?.iconUrl || `${GITHUB_RAW}/extensions/${name}/assets/icon.png`,
+      screenshotUrls: previous?.screenshotUrls || [],
+      categories: previous?.categories || [],
+      platforms: previous?.platforms || [],
+      commands: previous?.commands || [],
+    };
+  });
+
+  result.sort((a, b) => a.title.localeCompare(b.title));
+  return result;
+}
+
+async function downloadExtensionFromTree(name: string, tmpDir: string): Promise<string | null> {
+  const treeEntries = await fetchRepoTreeEntries();
+  const prefix = `extensions/${name}/`;
+  const fileEntries = treeEntries.filter(
+    (entry) => entry.type === 'blob' && entry.path.startsWith(prefix)
+  );
+  if (fileEntries.length === 0) return null;
+
+  const srcDir = path.join(tmpDir, 'extensions', name);
+  fs.mkdirSync(srcDir, { recursive: true });
+
+  for (const entry of fileEntries) {
+    const relativePath = entry.path.slice(prefix.length);
+    if (!relativePath) continue;
+
+    const destination = path.join(srcDir, relativePath);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+
+    const fileUrl = `${GITHUB_RAW}/${entry.path}`;
+    const response = await fetchWithTimeout(
+      fileUrl,
+      {
+        headers: {
+          'User-Agent': 'SuperCmd',
+          Accept: 'application/octet-stream',
+        },
+      },
+      90_000
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to download ${entry.path} (${response.status} ${response.statusText})`);
+    }
+    const data = await response.arrayBuffer();
+    fs.writeFileSync(destination, Buffer.from(data));
+  }
+
+  return srcDir;
+}
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -327,6 +700,7 @@ async function fetchCatalogFromGitHub(): Promise<CatalogEntry[]> {
     app.getPath('temp'),
     `supercmd-catalog-${Date.now()}`
   );
+  const diskCache = loadCatalogFromDisk();
 
   try {
     console.log('Cloning extension catalog (sparse)…');
@@ -347,109 +721,11 @@ async function fetchCatalogFromGitHub(): Promise<CatalogEntry[]> {
 
     const extensionsDir = path.join(tmpDir, 'extensions');
     if (!fs.existsSync(extensionsDir)) return [];
-
-    const dirs = fs.readdirSync(extensionsDir);
-    const entries: CatalogEntry[] = [];
-
-    for (const dir of dirs) {
-      const pkgPath = path.join(extensionsDir, dir, 'package.json');
-      if (!fs.existsSync(pkgPath)) continue;
-
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-
-        const toAssetUrl = (value: string): string => {
-          if (!value) return '';
-          if (/^https?:\/\//i.test(value)) return value;
-          const normalized = value.replace(/^\.?\//, '');
-          if (normalized.startsWith('extensions/')) {
-            return `${GITHUB_RAW}/${normalized}`;
-          }
-          return `${GITHUB_RAW}/extensions/${dir}/${normalized}`;
-        };
-
-        const iconFile = pkg.icon || 'assets/icon.png';
-        const iconUrl = toAssetUrl(
-          iconFile.includes('/') ? iconFile : `assets/${iconFile}`
-        );
-
-        const commands = (pkg.commands || []).map((c: any) => ({
-          name: c.name || '',
-          title: c.title || '',
-          description: c.description || '',
-        }));
-        const platforms = getManifestPlatforms(pkg);
-        if (!isManifestPlatformCompatible(pkg)) {
-          continue;
-        }
-
-        const normalizePerson = (p: any): string | null => {
-          if (!p) return null;
-          if (typeof p === 'string') {
-            const cleaned = p.split('<')[0].split('(')[0].trim();
-            return cleaned || null;
-          }
-          if (typeof p === 'object') {
-            const name = typeof p.name === 'string' ? p.name.trim() : '';
-            return name || null;
-          }
-          return null;
-        };
-
-        const contributors: string[] = [];
-        const addContributor = (name: string | null) => {
-          if (!name) return;
-          if (!contributors.includes(name)) contributors.push(name);
-        };
-
-        addContributor(normalizePerson(pkg.author));
-        if (Array.isArray(pkg.contributors)) {
-          for (const person of pkg.contributors) {
-            addContributor(normalizePerson(person));
-          }
-        }
-
-        const authorName = normalizePerson(pkg.author) || '';
-        const screenshotUrlsFromPackage: string[] = Array.isArray(pkg.screenshots)
-          ? pkg.screenshots
-              .map((entry: any) => {
-                if (typeof entry === 'string') return toAssetUrl(entry);
-                if (entry && typeof entry === 'object') {
-                  if (typeof entry.path === 'string') return toAssetUrl(entry.path);
-                  if (typeof entry.src === 'string') return toAssetUrl(entry.src);
-                  if (typeof entry.url === 'string') return toAssetUrl(entry.url);
-                }
-                return '';
-              })
-              .filter(Boolean)
-          : [];
-
-        const screenshotUrls = screenshotUrlsFromPackage;
-
-        entries.push({
-          name: dir,
-          title: pkg.title || dir,
-          description: pkg.description || '',
-          author: authorName,
-          contributors,
-          icon: iconFile,
-          iconUrl,
-          screenshotUrls,
-          categories: pkg.categories || [],
-          platforms,
-          commands,
-        });
-      } catch {
-        // Skip malformed package.json
-      }
-    }
-
-    entries.sort((a, b) => a.title.localeCompare(b.title));
-    return entries;
-  } catch (error) {
+    return readCatalogEntriesFromExtensionsDir(extensionsDir);
+  } catch (error: any) {
     console.error('Failed to fetch catalog from GitHub:', error);
+
     // Fall back to disk cache even if expired
-    const diskCache = loadCatalogFromDisk();
     if (diskCache) return diskCache.entries;
     return [];
   } finally {
@@ -643,6 +919,11 @@ export function getInstalledExtensionNames(): string[] {
  * Uses git sparse-checkout to download only the specific extension directory.
  */
 export async function installExtension(name: string): Promise<boolean> {
+  if (!/^[A-Za-z0-9._-]+$/.test(String(name || ''))) {
+    console.error(`Invalid extension name: "${name}"`);
+    return false;
+  }
+
   const installPath = getInstalledPath(name);
   const hadExistingInstall = fs.existsSync(installPath);
   const backupPath = hadExistingInstall
@@ -656,23 +937,29 @@ export async function installExtension(name: string): Promise<boolean> {
 
   try {
     console.log(`Installing extension: ${name}…`);
+    let srcDir: string | null = null;
 
-    // Sparse clone
-    await runGitCommand(
-      app.getPath('temp'),
-      `clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" "${tmpDir}"`,
-      60_000
-    );
+    try {
+      // Sparse clone
+      await runGitCommand(
+        app.getPath('temp'),
+        `clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" "${tmpDir}"`,
+        60_000
+      );
 
-    // Checkout only this extension
-    await runGitCommand(
-      tmpDir,
-      `sparse-checkout set "extensions/${name}"`,
-      60_000
-    );
+      // Checkout only this extension
+      await runGitCommand(
+        tmpDir,
+        `sparse-checkout set "extensions/${name}"`,
+        60_000
+      );
 
-    const srcDir = path.join(tmpDir, 'extensions', name);
-    if (!fs.existsSync(srcDir)) {
+      srcDir = path.join(tmpDir, 'extensions', name);
+    } catch (acquireError: any) {
+      throw acquireError;
+    }
+
+    if (!srcDir || !fs.existsSync(srcDir)) {
       console.error(`Extension "${name}" not found in repository.`);
       return false;
     }
