@@ -1139,6 +1139,7 @@ function resolveEdgeVoice(language?: string): string {
 
 function resolveElevenLabsSttModel(model: string): string {
   const raw = String(model || '').trim().toLowerCase();
+  if (raw.includes('scribe_v2') || raw.includes('scribe-v2')) return 'scribe_v2';
   if (raw.includes('scribe')) return 'scribe_v1';
   const noPrefix = raw.replace(/^elevenlabs-/, '');
   if (!noPrefix) return 'scribe_v1';

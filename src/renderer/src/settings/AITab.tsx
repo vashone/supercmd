@@ -60,6 +60,7 @@ const WHISPER_STT_OPTIONS = [
   { id: 'openai-gpt-4o-transcribe', label: 'OpenAI GPT-4o Transcribe' },
   { id: 'openai-whisper-1', label: 'OpenAI Whisper-1' },
   { id: 'elevenlabs-scribe-v1', label: 'ElevenLabs Scribe v1' },
+  { id: 'elevenlabs-scribe-v2', label: 'ElevenLabs Scribe v2' },
 ];
 
 const SPEAK_TTS_OPTIONS = [
