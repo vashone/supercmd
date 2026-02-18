@@ -375,7 +375,12 @@ const AITab: React.FC = () => {
         id: `ollama-${name}`,
         label: CURATED_OLLAMA_MODELS.find((m) => m.name === name)?.label || name,
       }))
-    : MODELS_BY_PROVIDER[ai.provider] || [];
+    : ai.provider === 'openai-compatible' && ai.openaiCompatibleModel
+      ? [{
+          id: `openai-compatible-${ai.openaiCompatibleModel}`,
+          label: ai.openaiCompatibleModel,
+        }]
+      : MODELS_BY_PROVIDER[ai.provider] || [];
 
   const whisperModelValue = (!ai.speechToTextModel || ai.speechToTextModel === 'default')
     ? 'native'
@@ -699,7 +704,13 @@ const AITab: React.FC = () => {
                       <input
                         type="text"
                         value={ai.openaiCompatibleModel}
-                        onChange={(e) => updateAI({ openaiCompatibleModel: e.target.value.trim() })}
+                        onChange={(e) => {
+                          const modelName = e.target.value.trim();
+                          updateAI({ 
+                            openaiCompatibleModel: modelName,
+                            defaultModel: modelName ? `openai-compatible-${modelName}` : ''
+                          });
+                        }}
                         placeholder="anthropic/claude-3.5-sonnet"
                         className="w-full bg-white/[0.04] border border-white/[0.08] rounded-md px-2.5 py-2 text-sm text-white/90 placeholder-white/30 focus:outline-none focus:border-blue-500/50"
                       />
