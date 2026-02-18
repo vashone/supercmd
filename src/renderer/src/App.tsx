@@ -16,7 +16,7 @@ import OnboardingExtension from './OnboardingExtension';
 import FileSearchExtension from './FileSearchExtension';
 import SuperCmdWhisper from './SuperCmdWhisper';
 import SuperCmdRead from './SuperCmdRead';
-import { tryCalculate } from './smart-calculator';
+import { tryCalculate, tryCalculateAsync } from './smart-calculator';
 import { useDetachedPortalWindow } from './useDetachedPortalWindow';
 import { useAppViewManager } from './hooks/useAppViewManager';
 import { useAiChat } from './hooks/useAiChat';
@@ -151,6 +151,7 @@ const App: React.FC = () => {
   const actionsOverlayRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const lastWindowHiddenAtRef = useRef<number>(0);
+  const calcRequestSeqRef = useRef(0);
   const pinnedCommandsRef = useRef<string[]>([]);
   const extensionViewRef = useRef<ExtensionBundle | null>(null);
   extensionViewRef.current = extensionView;
@@ -711,9 +712,37 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const calcResult = useMemo(() => {
+  const syncCalcResult = useMemo(() => {
     return searchQuery ? tryCalculate(searchQuery) : null;
   }, [searchQuery]);
+  const [asyncCalcResult, setAsyncCalcResult] =
+    useState<Awaited<ReturnType<typeof tryCalculateAsync>>>(null);
+  useEffect(() => {
+    calcRequestSeqRef.current += 1;
+    const requestSeq = calcRequestSeqRef.current;
+
+    if (!searchQuery || syncCalcResult) {
+      setAsyncCalcResult(null);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void tryCalculateAsync(searchQuery)
+        .then((result) => {
+          if (calcRequestSeqRef.current !== requestSeq) return;
+          setAsyncCalcResult(result);
+        })
+        .catch(() => {
+          if (calcRequestSeqRef.current !== requestSeq) return;
+          setAsyncCalcResult(null);
+        });
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery, syncCalcResult]);
+  const calcResult = syncCalcResult ?? asyncCalcResult;
   const calcOffset = calcResult ? 1 : 0;
   const contextualCommands = commands;
   const filteredCommands = useMemo(
