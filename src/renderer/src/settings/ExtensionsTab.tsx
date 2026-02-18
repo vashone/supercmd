@@ -75,6 +75,11 @@ function isPreferenceMissing(pref: ExtensionPreferenceSchema, value: any): boole
 const normalizeMatchKey = (value: string): string =>
   value.trim().toLowerCase().replace(/[\s_]+/g, '-');
 
+const SUPERCMD_EXTENSION_NAME = '__supercmd';
+const SCRIPT_COMMANDS_EXTENSION_NAME = '__script_commands';
+const INSTALLED_APPLICATIONS_NAME = '__installed_applications';
+const SYSTEM_SETTINGS_NAME = '__system_settings';
+
 const ExtensionsTab: React.FC<{
   focusTarget?: SettingsFocusTarget | null;
   onFocusTargetHandled?: () => void;
@@ -138,11 +143,19 @@ const ExtensionsTab: React.FC<{
         continue;
       }
       if (cmd.category === 'script') {
-        map.set(`__script_commands/${cmd.id}`, cmd);
+        map.set(`${SCRIPT_COMMANDS_EXTENSION_NAME}/${cmd.id}`, cmd);
         continue;
       }
       if (cmd.category === 'system') {
-        map.set(`__supercmd/${cmd.id}`, cmd);
+        map.set(`${SUPERCMD_EXTENSION_NAME}/${cmd.id}`, cmd);
+        continue;
+      }
+      if (cmd.category === 'app') {
+        map.set(`${INSTALLED_APPLICATIONS_NAME}/${cmd.id}`, cmd);
+        continue;
+      }
+      if (cmd.category === 'settings') {
+        map.set(`${SYSTEM_SETTINGS_NAME}/${cmd.id}`, cmd);
       }
     }
     return map;
@@ -205,8 +218,8 @@ const ExtensionsTab: React.FC<{
 
     const systemCommands = commands.filter((cmd) => cmd.category === 'system');
     if (systemCommands.length > 0) {
-      byExt.set('__supercmd', {
-        extName: '__supercmd',
+      byExt.set(SUPERCMD_EXTENSION_NAME, {
+        extName: SUPERCMD_EXTENSION_NAME,
         title: 'SuperCmd',
         description: 'Built-in SuperCmd commands',
         owner: 'supercmd',
@@ -226,8 +239,8 @@ const ExtensionsTab: React.FC<{
 
     const scriptCommands = commands.filter((cmd) => cmd.category === 'script');
     if (scriptCommands.length > 0) {
-      byExt.set('__script_commands', {
-        extName: '__script_commands',
+      byExt.set(SCRIPT_COMMANDS_EXTENSION_NAME, {
+        extName: SCRIPT_COMMANDS_EXTENSION_NAME,
         title: 'Script Commands',
         description: 'Custom and Raycast-compatible script commands',
         owner: 'supercmd',
@@ -245,11 +258,63 @@ const ExtensionsTab: React.FC<{
       });
     }
 
+    const installedApplications = commands
+      .filter((cmd) => cmd.category === 'app')
+      .sort((a, b) => a.title.localeCompare(b.title));
+    if (installedApplications.length > 0) {
+      const finderIcon = installedApplications.find((cmd) => cmd.title.toLowerCase() === 'finder')?.iconDataUrl;
+      const fallbackIcon = installedApplications.find((cmd) => Boolean(cmd.iconDataUrl))?.iconDataUrl;
+      byExt.set(INSTALLED_APPLICATIONS_NAME, {
+        extName: INSTALLED_APPLICATIONS_NAME,
+        title: 'Applications',
+        description: 'Installed macOS applications with launch and hotkey support.',
+        owner: 'supercmd',
+        iconDataUrl: finderIcon || fallbackIcon,
+        preferences: [],
+        commands: installedApplications.map((cmd) => ({
+          name: cmd.id,
+          title: cmd.title,
+          description: cmd.subtitle || 'Application',
+          mode: 'no-view',
+          interval: cmd.interval,
+          disabledByDefault: Boolean(cmd.disabledByDefault),
+          preferences: [],
+        })),
+      });
+    }
+
+    const systemSettingsCommands = commands
+      .filter((cmd) => cmd.category === 'settings')
+      .sort((a, b) => a.title.localeCompare(b.title));
+    if (systemSettingsCommands.length > 0) {
+      byExt.set(SYSTEM_SETTINGS_NAME, {
+        extName: SYSTEM_SETTINGS_NAME,
+        title: 'System Settings',
+        description: 'macOS settings panes with launch and hotkey support.',
+        owner: 'supercmd',
+        iconDataUrl: systemSettingsCommands.find((cmd) => Boolean(cmd.iconDataUrl))?.iconDataUrl,
+        preferences: [],
+        commands: systemSettingsCommands.map((cmd) => ({
+          name: cmd.id,
+          title: cmd.title,
+          description: cmd.subtitle || 'System Settings pane',
+          mode: 'no-view',
+          interval: cmd.interval,
+          disabledByDefault: Boolean(cmd.disabledByDefault),
+          preferences: [],
+        })),
+      });
+    }
+
     return Array.from(byExt.values()).sort((a, b) => {
-      if (a.extName === '__supercmd') return -1;
-      if (b.extName === '__supercmd') return 1;
-      if (a.extName === '__script_commands') return -1;
-      if (b.extName === '__script_commands') return 1;
+      if (a.extName === SUPERCMD_EXTENSION_NAME) return -1;
+      if (b.extName === SUPERCMD_EXTENSION_NAME) return 1;
+      if (a.extName === INSTALLED_APPLICATIONS_NAME) return -1;
+      if (b.extName === INSTALLED_APPLICATIONS_NAME) return 1;
+      if (a.extName === SYSTEM_SETTINGS_NAME) return -1;
+      if (b.extName === SYSTEM_SETTINGS_NAME) return 1;
+      if (a.extName === SCRIPT_COMMANDS_EXTENSION_NAME) return -1;
+      if (b.extName === SCRIPT_COMMANDS_EXTENSION_NAME) return 1;
       return a.title.localeCompare(b.title);
     });
   }, [schemas, commands]);
@@ -331,7 +396,12 @@ const ExtensionsTab: React.FC<{
     setExpandedExtensions((prev) => {
       const next = { ...prev };
       for (const schema of displaySchemas) {
-        if (next[schema.extName] === undefined) next[schema.extName] = true;
+        if (next[schema.extName] === undefined) {
+          next[schema.extName] =
+            schema.extName === INSTALLED_APPLICATIONS_NAME || schema.extName === SYSTEM_SETTINGS_NAME
+              ? false
+              : true;
+        }
       }
       return next;
     });
@@ -463,7 +533,17 @@ const ExtensionsTab: React.FC<{
     ? resolveCommandInfo(selectedSchema?.extName || '', selectedCommandSchema.name)
     : undefined;
 
-  const getModeTypeLabel = (mode: string): string => {
+  const getSchemaTypeLabel = (extName: string): string => {
+    if (extName === SUPERCMD_EXTENSION_NAME) return 'Built-in';
+    if (extName === INSTALLED_APPLICATIONS_NAME) return 'Apps';
+    if (extName === SYSTEM_SETTINGS_NAME) return 'Settings';
+    if (extName === SCRIPT_COMMANDS_EXTENSION_NAME) return 'Scripts';
+    return 'Extension';
+  };
+
+  const getModeTypeLabel = (mode: string, command?: CommandInfo): string => {
+    if (command?.category === 'app') return 'Application';
+    if (command?.category === 'settings') return 'Settings';
     if (mode === 'menu-bar') return 'Menu Bar C...';
     if (mode === 'no-view') return 'Command';
     return 'Command';
@@ -485,6 +565,13 @@ const ExtensionsTab: React.FC<{
     if (commandId.includes('export-snippets')) return <FileOutput className="w-3.5 h-3.5 text-white/55 flex-shrink-0" />;
     if (commandId.includes('quit')) return <LogOut className="w-3.5 h-3.5 text-white/55 flex-shrink-0" />;
     if (commandId.includes('onboarding')) return <Sparkles className="w-3.5 h-3.5 text-white/55 flex-shrink-0" />;
+    return <TerminalSquare className="w-3.5 h-3.5 text-white/45 flex-shrink-0" />;
+  };
+
+  const getSystemExtensionCommandIcon = (command?: CommandInfo) => {
+    if (command?.category === 'settings') {
+      return <Settings className="w-3.5 h-3.5 text-white/55 flex-shrink-0" />;
+    }
     return <TerminalSquare className="w-3.5 h-3.5 text-white/45 flex-shrink-0" />;
   };
 
@@ -724,14 +811,20 @@ const ExtensionsTab: React.FC<{
                       )}
                       {(schema.iconDataUrl || extensionIconFallbackByName.get(schema.extName)) ? (
                         <img src={schema.iconDataUrl || extensionIconFallbackByName.get(schema.extName)} alt="" className="w-4 h-4 rounded-sm object-contain" draggable={false} />
-                      ) : schema.extName === '__supercmd' ? (
+                      ) : schema.extName === SUPERCMD_EXTENSION_NAME ? (
                         <img src={supercmdLogo} alt="" className="w-4 h-4 object-contain" draggable={false} />
+                      ) : schema.extName === SYSTEM_SETTINGS_NAME ? (
+                        <Settings className="w-4 h-4 text-white/65 flex-shrink-0" />
+                      ) : schema.extName === INSTALLED_APPLICATIONS_NAME ? (
+                        <TerminalSquare className="w-4 h-4 text-white/60 flex-shrink-0" />
+                      ) : schema.extName === SCRIPT_COMMANDS_EXTENSION_NAME ? (
+                        <TerminalSquare className="w-4 h-4 text-white/60 flex-shrink-0" />
                       ) : (
                         <Puzzle className="w-4 h-4 text-violet-300/80" />
                       )}
                       <span className="text-sm text-white/90 truncate">{schema.title}</span>
                     </span>
-                    <span className="text-sm text-white/55">Extension</span>
+                    <span className="text-sm text-white/55">{getSchemaTypeLabel(schema.extName)}</span>
                     <span className="text-sm text-white/45">--</span>
                     <span className="text-sm text-white/45">--</span>
                     <span className="flex items-center justify-start">
@@ -764,14 +857,16 @@ const ExtensionsTab: React.FC<{
                           >
                             {commandInfo?.iconDataUrl ? (
                               <img src={commandInfo.iconDataUrl} alt="" className="w-3.5 h-3.5 rounded-sm object-contain flex-shrink-0" draggable={false} />
-                            ) : schema.extName === '__supercmd' ? (
+                            ) : schema.extName === SUPERCMD_EXTENSION_NAME ? (
                               getCoreCommandIcon(commandInfo?.id)
+                            ) : schema.extName === INSTALLED_APPLICATIONS_NAME || schema.extName === SYSTEM_SETTINGS_NAME ? (
+                              getSystemExtensionCommandIcon(commandInfo)
                             ) : (
                               <TerminalSquare className="w-3.5 h-3.5 text-white/45 flex-shrink-0" />
                             )}
                             <span className="text-xs text-white/85 truncate">{cmd.title}</span>
                           </button>
-                          <span className="text-xs text-white/55">{getModeTypeLabel(cmd.mode)}</span>
+                          <span className="text-xs text-white/55">{getModeTypeLabel(cmd.mode, commandInfo)}</span>
                           <span className="text-xs text-white/45">Add Alias</span>
                           {commandInfo ? (
                             <>
@@ -858,6 +953,14 @@ const ExtensionsTab: React.FC<{
                 <div className="flex items-center gap-2">
                   {selectedSchema.iconDataUrl ? (
                     <img src={selectedSchema.iconDataUrl} alt="" className="w-5 h-5 rounded object-contain" draggable={false} />
+                  ) : selectedSchema.extName === SUPERCMD_EXTENSION_NAME ? (
+                    <img src={supercmdLogo} alt="" className="w-5 h-5 object-contain" draggable={false} />
+                  ) : selectedSchema.extName === SYSTEM_SETTINGS_NAME ? (
+                    <Settings className="w-5 h-5 text-white/65" />
+                  ) : selectedSchema.extName === INSTALLED_APPLICATIONS_NAME ? (
+                    <TerminalSquare className="w-5 h-5 text-white/60" />
+                  ) : selectedSchema.extName === SCRIPT_COMMANDS_EXTENSION_NAME ? (
+                    <TerminalSquare className="w-5 h-5 text-white/60" />
                   ) : (
                     <Puzzle className="w-5 h-5 text-violet-300/80" />
                   )}
