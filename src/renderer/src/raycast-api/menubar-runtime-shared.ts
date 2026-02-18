@@ -5,6 +5,8 @@
 
 import React, { createContext } from 'react';
 import { getMenuBarRuntimeDeps } from './menubar-runtime-config';
+import { resolveTintColor } from './icon-runtime-assets';
+import { renderPhosphorIconDataUrl } from './icon-runtime-phosphor';
 
 export type MenuBarActionEvent = {
   type: 'left-click' | 'right-click';
@@ -61,6 +63,7 @@ export type MBRegistryAPI = {
 
 export type SerializedMenuBarIcon = {
   iconPath?: string;
+  iconDataUrl?: string;
   iconEmoji?: string;
 };
 
@@ -120,6 +123,7 @@ function pickMenuBarIconSource(icon: any): string {
 export function toMenuBarIconPayload(icon: any, assetsPath: string): SerializedMenuBarIcon | undefined {
   if (!icon) return undefined;
   const deps = getMenuBarRuntimeDeps();
+  const tintColor = resolveTintColor(icon?.tintColor);
 
   const source = typeof icon === 'object' && icon !== null ? pickMenuBarIconSource(icon) : icon;
   if (typeof source !== 'string' || !source.trim()) return undefined;
@@ -145,6 +149,13 @@ export function toMenuBarIconPayload(icon: any, assetsPath: string): SerializedM
   if (/\.(svg|png|jpe?g|gif|webp|ico|tiff?)$/i.test(src) && assetsPath) {
     return { iconPath: `${assetsPath}/${src}` };
   }
+
+  const iconToken = src.replace(/^Icon\./, '');
+  const dataUrl = renderPhosphorIconDataUrl(iconToken, {
+    size: 18,
+    color: tintColor || '#000000',
+  });
+  if (dataUrl) return { iconDataUrl: dataUrl };
 
   return undefined;
 }

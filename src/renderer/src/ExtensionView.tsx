@@ -9,7 +9,7 @@
  */
 
 import * as React from 'react';
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import * as ReactDOM from 'react-dom';
 import * as JsxRuntime from 'react/jsx-runtime';
 import { ArrowLeft, AlertTriangle } from 'lucide-react';
@@ -2500,6 +2500,17 @@ function loadExtensionExport(
   code: string,
   extensionPath?: string
 ): Function | null {
+  const patchSchemeDynamicImports = (sourceCode: string): string => {
+    // Extension bundles may emit dynamic imports for native Raycast bridges
+    // (e.g. import("swift:../swift/color-picker")). Our runtime executes in
+    // a custom CJS wrapper, so we rewrite these to a loader hook that can
+    // resolve the scheme via fakeRequire.
+    return String(sourceCode || '').replace(
+      /\bimport\(\s*(["'])(swift:[^"']+|rust:[^"']+)\1\s*\)/g,
+      (_match, quote, specifier) => `__scDynamicImport(${quote}${specifier}${quote})`
+    );
+  };
+
   // Make sure Node globals (process, Buffer, global) are available
   ensureGlobals();
 
@@ -2529,6 +2540,7 @@ function loadExtensionExport(
   try {
     const moduleExports: any = {};
     const fakeModule = { exports: moduleExports };
+    const executableCode = patchSchemeDynamicImports(code);
 
     // Custom require that provides our shim modules.
     // This is the critical bridge between extension code and the
@@ -2695,6 +2707,27 @@ function loadExtensionExport(
         return {};
       }
 
+      // ── Rust native bridges (Raycast-specific) ─────────────
+      // Some extension bundles include rust: dynamic imports on non-mac paths.
+      // Keep parity with swift bridge stubs.
+      if (name.startsWith('rust:')) {
+        if (name.includes('color-picker')) {
+          return {
+            pick_color: async () => {
+              try {
+                const result = await window.electron.nativePickColor();
+                return result;
+              } catch (e) {
+                console.error('Native color picker (rust bridge) failed:', e);
+                return undefined;
+              }
+            },
+          };
+        }
+        // Unknown rust module — return empty
+        return {};
+      }
+
       // ── Handle deep imports (e.g. 'stream/web', 'util/types') ─
       const slashIdx = name.indexOf('/');
       if (slashIdx > 0) {
@@ -2730,6 +2763,18 @@ function loadExtensionExport(
     fakeRequire.extensions = {};
     fakeRequire.main = undefined;
 
+    const scDynamicImport = async (specifier: string): Promise<any> => {
+      const id = String(specifier || '');
+      if (id.startsWith('swift:') || id.startsWith('rust:')) {
+        const mod = fakeRequire(id);
+        if (mod && typeof mod === 'object') {
+          return { default: mod, ...mod };
+        }
+        return { default: mod };
+      }
+      throw new Error(`Unsupported dynamic import in extension runtime: ${id}`);
+    };
+
     // Execute the CJS bundle in a function scope.
     // We pass all the standard CJS arguments plus `process`, `Buffer`,
     // and `global` to ensure they are always in scope even when the
@@ -2746,7 +2791,8 @@ function loadExtensionExport(
       'globalThis',
       'setImmediate',
       'clearImmediate',
-      code
+      '__scDynamicImport',
+      executableCode
     );
 
     fn(
@@ -2761,6 +2807,7 @@ function loadExtensionExport(
       globalThis,
       (cb: Function, ...args: any[]) => setTimeout(() => cb(...args), 0),
       clearTimeout,
+      scDynamicImport,
     );
 
     // Get the default export
@@ -2814,8 +2861,18 @@ const NoViewRunner: React.FC<{
 }) => {
   const [status, setStatus] = useState<'running' | 'done' | 'error'>('running');
   const [errorMsg, setErrorMsg] = useState('');
+  const hasStartedRef = useRef(false);
+  const closeTimerRef = useRef<number | null>(null);
+  const onCloseRef = useRef(onClose);
 
   useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (hasStartedRef.current) return;
+    hasStartedRef.current = true;
+
     let cancelled = false;
 
     (async () => {
@@ -2828,7 +2885,7 @@ const NoViewRunner: React.FC<{
         });
         if (!cancelled) {
           setStatus('done');
-          setTimeout(() => onClose(), 600);
+          closeTimerRef.current = window.setTimeout(() => onCloseRef.current(), 600);
         }
       } catch (e: any) {
         if (!cancelled) {
@@ -2838,8 +2895,14 @@ const NoViewRunner: React.FC<{
       }
     })();
 
-    return () => { cancelled = true; };
-  }, [fn, onClose, launchArguments, launchContext, fallbackText, launchType]);
+    return () => {
+      cancelled = true;
+      if (closeTimerRef.current != null) {
+        window.clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+    };
+  }, [fn, launchArguments, launchContext, fallbackText, launchType]);
 
   return (
     <div className="flex flex-col items-center justify-center h-full gap-3">

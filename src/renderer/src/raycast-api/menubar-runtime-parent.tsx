@@ -137,6 +137,7 @@ export function MenuBarExtraComponent({ children, icon, title, tooltip, isLoadin
     (window as any).electron?.updateMenuBar?.({
       extId,
       iconPath: trayIconPayload.iconPath,
+      iconDataUrl: trayIconPayload.iconDataUrl,
       iconEmoji: trayIconPayload.iconEmoji,
       title: title || '',
       tooltip: tooltip || '',

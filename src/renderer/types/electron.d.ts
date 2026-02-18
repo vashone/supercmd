@@ -224,6 +224,7 @@ export interface ElectronAPI {
   getCommands: () => Promise<CommandInfo[]>;
   executeCommand: (commandId: string) => Promise<boolean>;
   hideWindow: () => Promise<void>;
+  openDevTools: () => Promise<boolean>;
   closePromptWindow: () => Promise<void>;
   setLauncherMode: (mode: 'default' | 'onboarding' | 'whisper' | 'speak' | 'prompt') => Promise<void>;
   getLastFrontmostApp: () => Promise<{ name: string; path: string; bundleId?: string } | null>;

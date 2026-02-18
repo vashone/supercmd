@@ -2,6 +2,9 @@ import AppKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Ensure the sampler can present even when launched from a background runner.
+        NSApp.activate(ignoringOtherApps: true)
+
         let sampler = NSColorSampler()
         sampler.show { selectedColor in
             if let color = selectedColor?.usingColorSpace(.sRGB) {
