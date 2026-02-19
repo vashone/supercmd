@@ -7044,10 +7044,55 @@ return appURL's |path|() as text`,
   });
 
   // Focus-safe clipboard APIs for extension/runtime shims.
-  ipcMain.handle('clipboard-write', (_event: any, payload: { text?: string; html?: string }) => {
+  ipcMain.handle('clipboard-write', (_event: any, payload: { text?: string; html?: string; file?: string }) => {
     try {
       const text = payload?.text || '';
       const html = payload?.html || '';
+      const file = String(payload?.file || '').trim();
+      if (file) {
+        const fs = require('fs') as typeof import('fs');
+        let normalizedFile = file;
+        if (normalizedFile.startsWith('file://')) {
+          try {
+            const { fileURLToPath } = require('url') as typeof import('url');
+            normalizedFile = fileURLToPath(normalizedFile);
+          } catch {}
+        }
+        if (normalizedFile.startsWith('~')) {
+          normalizedFile = path.join(app.getPath('home'), normalizedFile.slice(1));
+        }
+        normalizedFile = path.resolve(normalizedFile);
+
+        if (fs.existsSync(normalizedFile)) {
+          if (process.platform === 'darwin') {
+            try {
+              const { execFileSync } = require('child_process') as typeof import('child_process');
+              const script = `set the clipboard to (POSIX file ${JSON.stringify(normalizedFile)})`;
+              execFileSync('osascript', ['-e', script], { stdio: 'ignore' });
+              return true;
+            } catch {
+              try {
+                const { pathToFileURL } = require('url') as typeof import('url');
+                const fileUrl = pathToFileURL(normalizedFile).toString();
+                systemClipboard.clear();
+                systemClipboard.writeBuffer('public.file-url', Buffer.from(`${fileUrl}\0`, 'utf8'));
+                return true;
+              } catch {}
+            }
+          }
+
+          const image = nativeImage.createFromPath(normalizedFile);
+          if (!image.isEmpty()) {
+            systemClipboard.writeImage(image);
+          } else if (html) {
+            systemClipboard.write({ text: text || normalizedFile, html });
+          } else {
+            systemClipboard.writeText(text || normalizedFile);
+          }
+          return true;
+        }
+      }
+
       if (html) {
         systemClipboard.write({ text, html });
       } else {

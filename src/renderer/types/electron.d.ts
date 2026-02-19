@@ -407,7 +407,7 @@ export interface ElectronAPI {
   clipboardCopyItem: (id: string) => Promise<boolean>;
   clipboardPasteItem: (id: string) => Promise<boolean>;
   clipboardSetEnabled: (enabled: boolean) => Promise<void>;
-  clipboardWrite: (payload: { text?: string; html?: string }) => Promise<boolean>;
+  clipboardWrite: (payload: { text?: string; html?: string; file?: string }) => Promise<boolean>;
   clipboardReadText: () => Promise<string>;
   getSelectedText: () => Promise<string>;
   getSelectedTextStrict: () => Promise<string>;
