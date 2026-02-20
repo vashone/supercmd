@@ -58,7 +58,7 @@ select {
 .glass-effect {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
-    rgba(24, 22, 23, 0.93);
+    rgba(22, 20, 21, 0.94);
   -webkit-backdrop-filter: blur(54px) saturate(170%);
   backdrop-filter: blur(54px) saturate(170%);
   position: relative;

@@ -194,7 +194,7 @@ const GeneralTab: React.FC = () => {
     <div className="w-full max-w-[980px] mx-auto space-y-3">
       <h2 className="text-[15px] font-semibold text-white">General</h2>
 
-      <div className="overflow-hidden rounded-xl border border-white/[0.10] bg-white/[0.02]">
+      <div className="overflow-hidden rounded-xl border border-white/[0.10] bg-[rgba(18,16,17,0.30)]">
         <SettingsRow
           icon={<Keyboard className="w-4 h-4" />}
           title="Launcher Shortcut"

@@ -1969,7 +1969,7 @@ const App: React.FC = () => {
         {/* Footer actions */}
         {!isLoading && (
           <div
-            className="flex items-center px-4 py-3.5 border-t border-white/[0.10]"
+            className="flex items-center px-4 py-2.5 border-t border-white/[0.10]"
             style={{
               background:
                 'linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03)), rgba(30,31,36,0.66)',
@@ -1978,7 +1978,7 @@ const App: React.FC = () => {
             }}
           >
             <div
-              className={`flex items-center gap-2 text-xs flex-1 min-w-0 font-medium truncate ${
+              className={`flex items-center gap-2 text-xs flex-1 min-w-0 font-normal truncate ${
                 memoryActionLoading
                   ? 'text-white/60'
                   : memoryFeedback
@@ -2010,7 +2010,7 @@ const App: React.FC = () => {
               <div className="flex items-center gap-2 mr-3">
                 <button
                   onClick={() => selectedActions[0].execute()}
-                  className="text-white text-xs font-medium hover:text-white/85 transition-colors"
+                  className="text-white text-xs font-normal hover:text-white/85 transition-colors"
                 >
                   {selectedActions[0].title}
                 </button>
@@ -2028,7 +2028,7 @@ const App: React.FC = () => {
               }}
               className="flex items-center gap-1.5 text-white/50 hover:text-white/70 transition-colors"
             >
-              <span className="text-xs font-medium">Actions</span>
+              <span className="text-xs font-normal">Actions</span>
               <kbd className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded bg-white/[0.08] text-[11px] text-white/40 font-medium">⌘</kbd>
               <kbd className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded bg-white/[0.08] text-[11px] text-white/40 font-medium">K</kbd>
             </button>
