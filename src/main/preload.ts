@@ -241,7 +241,7 @@ contextBridge.exposeInMainWorld('electron', {
   updateCommandHotkey: (
     commandId: string,
     hotkey: string
-  ): Promise<{ success: boolean; error?: 'duplicate' | 'unavailable' }> =>
+  ): Promise<{ success: boolean; error?: 'duplicate' | 'unavailable'; conflictCommandId?: string }> =>
     ipcRenderer.invoke('update-command-hotkey', commandId, hotkey),
   toggleCommandEnabled: (
     commandId: string,
@@ -250,7 +250,7 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('toggle-command-enabled', commandId, enabled),
   openSettings: (): Promise<void> => ipcRenderer.invoke('open-settings'),
   openSettingsTab: (
-    tab: 'general' | 'ai' | 'extensions',
+    tab: 'general' | 'ai' | 'extensions' | 'advanced',
     target?: { extensionName?: string; commandName?: string }
   ): Promise<void> =>
     ipcRenderer.invoke('open-settings-tab', { tab, target }),
@@ -260,6 +260,13 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('open-custom-scripts-folder'),
   onSettingsTabChanged: (callback: (payload: any) => void) => {
     ipcRenderer.on('settings-tab-changed', (_event, payload) => callback(payload));
+  },
+  onSettingsUpdated: (callback: (settings: any) => void) => {
+    const listener = (_event: any, settings: any) => callback(settings);
+    ipcRenderer.on('settings-updated', listener);
+    return () => {
+      ipcRenderer.removeListener('settings-updated', listener);
+    };
   },
 
   // ─── Extension Runner ────────────────────────────────────────────

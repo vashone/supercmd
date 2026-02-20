@@ -524,7 +524,9 @@ const ExtensionsTab: React.FC<{
     const result = await window.electron.updateCommandHotkey(command.id, hotkey);
     if (!result.success) {
       const message = result.error === 'duplicate'
-        ? 'Hotkey already used by another SuperCmd command.'
+        ? result.conflictCommandId
+          ? `Hotkey already used by "${result.conflictCommandId}".`
+          : 'Hotkey already used by another SuperCmd command.'
         : 'Hotkey unavailable. It may be used by macOS or another app.';
       setHotkeyStatus({ type: 'error', text: message });
       setTimeout(() => setHotkeyStatus({ type: 'idle', text: '' }), 3200);

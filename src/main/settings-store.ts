@@ -50,6 +50,33 @@ export interface AppSettings {
   commandMetadata?: Record<string, { subtitle?: string }>;
   debugMode: boolean;
   fontSize: AppFontSize;
+  baseColor: string;
+  hyperKeySource:
+    | 'none'
+    | 'caps-lock'
+    | 'left-command'
+    | 'right-command'
+    | 'left-control'
+    | 'right-control'
+    | 'left-shift'
+    | 'right-shift'
+    | 'left-option'
+    | 'right-option'
+    | 'f1'
+    | 'f2'
+    | 'f3'
+    | 'f4'
+    | 'f5'
+    | 'f6'
+    | 'f7'
+    | 'f8'
+    | 'f9'
+    | 'f10'
+    | 'f11'
+    | 'f12';
+  hyperKeyIncludeShift: boolean;
+  hyperKeyQuickPressAction: 'toggle-caps-lock' | 'escape' | 'none';
+  hyperReplaceModifierGlyphsWithHyper: boolean;
 }
 
 const DEFAULT_AI_SETTINGS: AISettings = {
@@ -95,6 +122,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   ai: { ...DEFAULT_AI_SETTINGS },
   debugMode: false,
   fontSize: 'medium',
+  baseColor: '#181818',
+  hyperKeySource: 'none',
+  hyperKeyIncludeShift: true,
+  hyperKeyQuickPressAction: 'toggle-caps-lock',
+  hyperReplaceModifierGlyphsWithHyper: true,
 };
 
 let settingsCache: AppSettings | null = null;
@@ -103,6 +135,61 @@ function normalizeFontSize(value: any): AppFontSize {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'small' || normalized === 'large') return normalized;
   return 'medium';
+}
+
+function normalizeBaseColor(value: any): string {
+  const raw = String(value || '').trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(raw)) {
+    const short = raw.slice(1).split('').map((ch) => `${ch}${ch}`).join('');
+    return `#${short}`.toLowerCase();
+  }
+  return DEFAULT_SETTINGS.baseColor;
+}
+
+function normalizeHyperKeySource(value: any): AppSettings['hyperKeySource'] {
+  const raw = String(value || '').trim().toLowerCase();
+  const map: Record<string, AppSettings['hyperKeySource']> = {
+    'none': 'none',
+    'caps-lock': 'caps-lock',
+    'caps_lock': 'caps-lock',
+    'capslock': 'caps-lock',
+    'left-command': 'left-command',
+    'left-command-key': 'left-command',
+    'right-command': 'right-command',
+    'right-command-key': 'right-command',
+    'left-control': 'left-control',
+    'left-ctrl': 'left-control',
+    'right-control': 'right-control',
+    'right-ctrl': 'right-control',
+    'left-shift': 'left-shift',
+    'right-shift': 'right-shift',
+    'left-option': 'left-option',
+    'left-alt': 'left-option',
+    'right-option': 'right-option',
+    'right-alt': 'right-option',
+    'f1': 'f1',
+    'f2': 'f2',
+    'f3': 'f3',
+    'f4': 'f4',
+    'f5': 'f5',
+    'f6': 'f6',
+    'f7': 'f7',
+    'f8': 'f8',
+    'f9': 'f9',
+    'f10': 'f10',
+    'f11': 'f11',
+    'f12': 'f12',
+  };
+  if (map[raw]) return map[raw];
+  return 'none';
+}
+
+function normalizeHyperKeyQuickPressAction(value: any): 'toggle-caps-lock' | 'escape' | 'none' {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'escape' || raw === 'esc' || raw === 'trigger-esc' || raw === 'triggers-esc') return 'escape';
+  if (raw === 'none' || raw === 'does-nothing') return 'none';
+  return 'toggle-caps-lock';
 }
 
 function getSettingsPath(): string {
@@ -171,6 +258,12 @@ export function loadSettings(): AppSettings {
       commandMetadata: parsed.commandMetadata ?? {},
       debugMode: parsed.debugMode ?? DEFAULT_SETTINGS.debugMode,
       fontSize: normalizeFontSize(parsed.fontSize),
+      baseColor: normalizeBaseColor(parsed.baseColor),
+      hyperKeySource: normalizeHyperKeySource(parsed.hyperKeySource),
+      hyperKeyIncludeShift: parsed.hyperKeyIncludeShift ?? DEFAULT_SETTINGS.hyperKeyIncludeShift,
+      hyperKeyQuickPressAction: normalizeHyperKeyQuickPressAction(parsed.hyperKeyQuickPressAction),
+      hyperReplaceModifierGlyphsWithHyper:
+        parsed.hyperReplaceModifierGlyphsWithHyper ?? DEFAULT_SETTINGS.hyperReplaceModifierGlyphsWithHyper,
     };
   } catch {
     settingsCache = { ...DEFAULT_SETTINGS };

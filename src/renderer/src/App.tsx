@@ -26,6 +26,7 @@ import { useBackgroundRefresh } from './hooks/useBackgroundRefresh';
 import { useSpeakManager } from './hooks/useSpeakManager';
 import { useWhisperManager } from './hooks/useWhisperManager';
 import { LAST_EXT_KEY, MAX_RECENT_COMMANDS } from './utils/constants';
+import { applyBaseColor } from './utils/base-color';
 import { resetAccessToken } from './raycast-api';
 import {
   type LauncherAction, type MemoryFeedback,
@@ -213,6 +214,7 @@ const App: React.FC = () => {
       setConfiguredEdgeTtsVoice(String(settings.ai?.edgeTtsVoice || 'en-US-EricNeural'));
       setConfiguredTtsModel(String(settings.ai?.textToSpeechModel || 'edge-tts'));
       applyAppFontSize(settings.fontSize);
+      applyBaseColor(settings.baseColor || '#181818');
       const shouldShowOnboarding = !settings.hasSeenOnboarding;
       setShowOnboarding(shouldShowOnboarding);
       setOnboardingRequiresShortcutFix(shouldShowOnboarding && !shortcutStatus.ok);
@@ -225,6 +227,7 @@ const App: React.FC = () => {
       setConfiguredEdgeTtsVoice('en-US-EricNeural');
       setConfiguredTtsModel('edge-tts');
       applyAppFontSize(getDefaultAppFontSize());
+      applyBaseColor('#181818');
       setShowOnboarding(false);
       setOnboardingRequiresShortcutFix(false);
     }
@@ -424,6 +427,15 @@ const App: React.FC = () => {
       setSelectedTextSnapshot(String(payload?.selectedTextSnapshot || '').trim());
     });
     return cleanupSelectionSnapshotUpdated;
+  }, []);
+
+  useEffect(() => {
+    const cleanup = window.electron.onSettingsUpdated?.((settings: AppSettings) => {
+      applyAppFontSize(settings.fontSize);
+      applyBaseColor(settings.baseColor || '#181818');
+      setLauncherShortcut(settings.globalShortcut || 'Alt+Space');
+    });
+    return cleanup;
   }, []);
 
   // Listen for OAuth logout events from the settings window.

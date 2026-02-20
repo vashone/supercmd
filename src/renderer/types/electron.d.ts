@@ -165,6 +165,33 @@ export interface AppSettings {
   commandMetadata?: Record<string, { subtitle?: string }>;
   debugMode: boolean;
   fontSize: 'small' | 'medium' | 'large';
+  baseColor: string;
+  hyperKeySource:
+    | 'none'
+    | 'caps-lock'
+    | 'left-command'
+    | 'right-command'
+    | 'left-control'
+    | 'right-control'
+    | 'left-shift'
+    | 'right-shift'
+    | 'left-option'
+    | 'right-option'
+    | 'f1'
+    | 'f2'
+    | 'f3'
+    | 'f4'
+    | 'f5'
+    | 'f6'
+    | 'f7'
+    | 'f8'
+    | 'f9'
+    | 'f10'
+    | 'f11'
+    | 'f12';
+  hyperKeyIncludeShift: boolean;
+  hyperKeyQuickPressAction: 'toggle-caps-lock' | 'escape' | 'none';
+  hyperReplaceModifierGlyphsWithHyper: boolean;
 }
 
 export interface CatalogEntry {
@@ -305,14 +332,14 @@ export interface ElectronAPI {
   updateCommandHotkey: (
     commandId: string,
     hotkey: string
-  ) => Promise<{ success: boolean; error?: 'duplicate' | 'unavailable' }>;
+  ) => Promise<{ success: boolean; error?: 'duplicate' | 'unavailable'; conflictCommandId?: string }>;
   toggleCommandEnabled: (
     commandId: string,
     enabled: boolean
   ) => Promise<boolean>;
   openSettings: () => Promise<void>;
   openSettingsTab: (
-    tab: 'general' | 'ai' | 'extensions',
+    tab: 'general' | 'ai' | 'extensions' | 'advanced',
     target?: { extensionName?: string; commandName?: string }
   ) => Promise<void>;
   openExtensionStoreWindow: () => Promise<void>;
@@ -322,12 +349,14 @@ export interface ElectronAPI {
       | 'general'
       | 'ai'
       | 'extensions'
+      | 'advanced'
       | {
-          tab: 'general' | 'ai' | 'extensions';
+          tab: 'general' | 'ai' | 'extensions' | 'advanced';
           target?: { extensionName?: string; commandName?: string };
         }
     ) => void
   ) => void;
+  onSettingsUpdated: (callback: (settings: AppSettings) => void) => (() => void);
 
   // Extension Runner
   runExtension: (extName: string, cmdName: string) => Promise<ExtensionBundle | null>;

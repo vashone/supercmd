@@ -1,13 +1,17 @@
 import React, { useEffect } from 'react';
 import StoreTab from './settings/StoreTab';
 import { applyAppFontSize, getDefaultAppFontSize } from './utils/font-size';
+import { applyBaseColor } from './utils/base-color';
 
 const ExtensionStoreApp: React.FC = () => {
   useEffect(() => {
     let disposed = false;
     window.electron.getSettings()
       .then((settings) => {
-        if (!disposed) applyAppFontSize(settings.fontSize);
+        if (!disposed) {
+          applyAppFontSize(settings.fontSize);
+          applyBaseColor(settings.baseColor || '#181818');
+        }
       })
       .catch(() => {
         if (!disposed) applyAppFontSize(getDefaultAppFontSize());
@@ -15,6 +19,14 @@ const ExtensionStoreApp: React.FC = () => {
     return () => {
       disposed = true;
     };
+  }, []);
+
+  useEffect(() => {
+    const cleanup = window.electron.onSettingsUpdated?.((settings) => {
+      applyAppFontSize(settings.fontSize);
+      applyBaseColor(settings.baseColor || '#181818');
+    });
+    return cleanup;
   }, []);
 
   return (

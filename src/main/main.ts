@@ -312,6 +312,10 @@ let fnSpeakToggleWatcherProcess: any = null;
 let fnSpeakToggleWatcherStdoutBuffer = '';
 let fnSpeakToggleWatcherRestartTimer: NodeJS.Timeout | null = null;
 let fnSpeakToggleWatcherEnabled = false;
+const fnCommandWatcherProcesses = new Map<string, any>();
+const fnCommandWatcherStdoutBuffers = new Map<string, string>();
+const fnCommandWatcherRestartTimers = new Map<string, NodeJS.Timeout>();
+const fnCommandWatcherConfigs = new Map<string, string>();
 // When true, the Fn watcher is allowed to start even during onboarding (step 4 — Dictation test).
 let fnWatcherOnboardingOverride = false;
 let fnSpeakToggleLastPressedAt = 0;
@@ -1815,11 +1819,67 @@ function normalizeAccelerator(shortcut: string): string {
   const parts = raw.split('+').map((p) => p.trim()).filter(Boolean);
   if (parts.length === 0) return raw;
   const key = parts[parts.length - 1];
+  const modifierTokens = parts.slice(0, -1).map((part) => String(part || '').trim().toLowerCase());
+
+  const normalizedModifiers = {
+    command: false,
+    control: false,
+    alt: false,
+    shift: false,
+    fn: false,
+  };
+
+  const hasHyper = modifierTokens.some((token) => token === 'hyper' || token === '✦');
+  if (hasHyper) {
+    const includeShiftInHyper = Boolean(loadSettings().hyperKeyIncludeShift ?? true);
+    normalizedModifiers.command = true;
+    normalizedModifiers.control = true;
+    normalizedModifiers.alt = true;
+    normalizedModifiers.shift = includeShiftInHyper;
+  }
+
+  for (const token of modifierTokens) {
+    if (token === 'commandorcontrol' || token === 'cmdorctrl') {
+      if (process.platform === 'darwin') normalizedModifiers.command = true;
+      else normalizedModifiers.control = true;
+      continue;
+    }
+    if (token === 'cmd' || token === 'command' || token === 'meta' || token === 'super') {
+      normalizedModifiers.command = true;
+      continue;
+    }
+    if (token === 'ctrl' || token === 'control') {
+      normalizedModifiers.control = true;
+      continue;
+    }
+    if (token === 'alt' || token === 'option') {
+      normalizedModifiers.alt = true;
+      continue;
+    }
+    if (token === 'shift') {
+      normalizedModifiers.shift = true;
+      continue;
+    }
+    if (token === 'fn' || token === 'function') {
+      normalizedModifiers.fn = true;
+      continue;
+    }
+  }
+
   // Keep punctuation keys as punctuation for Electron accelerator parsing.
   if (/^period$/i.test(key)) {
     parts[parts.length - 1] = '.';
   }
-  return parts.join('+');
+
+  const keyPart = parts[parts.length - 1];
+  const output: string[] = [];
+  if (normalizedModifiers.command) output.push('Command');
+  if (normalizedModifiers.control) output.push('Control');
+  if (normalizedModifiers.alt) output.push('Alt');
+  if (normalizedModifiers.shift) output.push('Shift');
+  if (normalizedModifiers.fn) output.push('Fn');
+  output.push(keyPart);
+  return output.join('+');
 }
 
 function normalizeShortcutKeyToken(token: string): string {
@@ -1885,6 +1945,11 @@ function isFnOnlyShortcut(shortcut: string): boolean {
   return normalized === 'fn' || normalized === 'function';
 }
 
+function isFnShortcut(shortcut: string): boolean {
+  const config = parseHoldShortcutConfig(shortcut);
+  return Boolean(config?.fn);
+}
+
 function parseHoldShortcutConfig(shortcut: string): {
   keyCode: number;
   cmd: boolean;
@@ -1941,6 +2006,99 @@ function stopFnSpeakToggleWatcher(): void {
   try { fnSpeakToggleWatcherProcess.kill('SIGTERM'); } catch {}
   fnSpeakToggleWatcherProcess = null;
   fnSpeakToggleWatcherStdoutBuffer = '';
+}
+
+function stopFnCommandWatcher(commandId: string): void {
+  const timer = fnCommandWatcherRestartTimers.get(commandId);
+  if (timer) {
+    clearTimeout(timer);
+    fnCommandWatcherRestartTimers.delete(commandId);
+  }
+  const proc = fnCommandWatcherProcesses.get(commandId);
+  if (proc) {
+    try { proc.kill('SIGTERM'); } catch {}
+    fnCommandWatcherProcesses.delete(commandId);
+  }
+  fnCommandWatcherStdoutBuffers.delete(commandId);
+}
+
+function stopAllFnCommandWatchers(): void {
+  for (const commandId of Array.from(fnCommandWatcherProcesses.keys())) {
+    stopFnCommandWatcher(commandId);
+  }
+  fnCommandWatcherConfigs.clear();
+}
+
+function startFnCommandWatcher(commandId: string, shortcut: string): void {
+  const configuredShortcut = String(fnCommandWatcherConfigs.get(commandId) || '').trim();
+  if (!configuredShortcut || configuredShortcut !== String(shortcut || '').trim()) return;
+  if (fnCommandWatcherProcesses.has(commandId)) return;
+  const config = parseHoldShortcutConfig(shortcut);
+  if (!config || !config.fn) return;
+  const binaryPath = ensureWhisperHoldWatcherBinary();
+  if (!binaryPath) return;
+
+  const { spawn } = require('child_process');
+  const proc = spawn(
+    binaryPath,
+    [
+      String(config.keyCode),
+      config.cmd ? '1' : '0',
+      config.ctrl ? '1' : '0',
+      config.alt ? '1' : '0',
+      config.shift ? '1' : '0',
+      config.fn ? '1' : '0',
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+
+  fnCommandWatcherProcesses.set(commandId, proc);
+  fnCommandWatcherStdoutBuffers.set(commandId, '');
+
+  proc.stdout.on('data', (chunk: Buffer | string) => {
+    const prev = fnCommandWatcherStdoutBuffers.get(commandId) || '';
+    const next = `${prev}${chunk.toString()}`;
+    const lines = next.split('\n');
+    fnCommandWatcherStdoutBuffers.set(commandId, lines.pop() || '');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const payload = JSON.parse(trimmed);
+        if (payload?.pressed) {
+          void runCommandById(commandId, 'hotkey');
+        }
+      } catch {}
+    }
+  });
+
+  proc.stderr.on('data', (chunk: Buffer | string) => {
+    const text = chunk.toString().trim();
+    if (text) console.warn('[Hotkey][fn-watcher]', text);
+  });
+
+  const scheduleRestart = () => {
+    if (!fnCommandWatcherConfigs.has(commandId)) return;
+    const restartTimer = setTimeout(() => {
+      fnCommandWatcherRestartTimers.delete(commandId);
+      const desired = fnCommandWatcherConfigs.get(commandId);
+      if (!desired) return;
+      startFnCommandWatcher(commandId, desired);
+    }, 120);
+    fnCommandWatcherRestartTimers.set(commandId, restartTimer);
+  };
+
+  proc.on('error', () => {
+    fnCommandWatcherProcesses.delete(commandId);
+    fnCommandWatcherStdoutBuffers.delete(commandId);
+    scheduleRestart();
+  });
+
+  proc.on('exit', () => {
+    fnCommandWatcherProcesses.delete(commandId);
+    fnCommandWatcherStdoutBuffers.delete(commandId);
+    scheduleRestart();
+  });
 }
 
 function startFnSpeakToggleWatcher(): void {
@@ -2064,6 +2222,37 @@ function syncFnSpeakToggleWatcher(hotkeys: Record<string, string>): void {
   }
   fnSpeakToggleWatcherEnabled = true;
   startFnSpeakToggleWatcher();
+}
+
+function syncFnCommandWatchers(hotkeys: Record<string, string>): void {
+  const desired = new Map<string, string>();
+  for (const [commandId, shortcutRaw] of Object.entries(hotkeys || {})) {
+    const shortcut = String(shortcutRaw || '').trim();
+    if (!shortcut) continue;
+    const normalized = normalizeAccelerator(shortcut);
+    const isFnSpeakToggle = commandId === 'system-supercmd-whisper-speak-toggle' && isFnOnlyShortcut(normalized);
+    if (isFnSpeakToggle) continue;
+    if (!isFnShortcut(normalized)) continue;
+    desired.set(commandId, normalized);
+  }
+
+  for (const existingCommandId of Array.from(fnCommandWatcherConfigs.keys())) {
+    const nextShortcut = desired.get(existingCommandId);
+    const currentShortcut = fnCommandWatcherConfigs.get(existingCommandId);
+    if (!nextShortcut || nextShortcut !== currentShortcut) {
+      fnCommandWatcherConfigs.delete(existingCommandId);
+      stopFnCommandWatcher(existingCommandId);
+    }
+  }
+
+  for (const [commandId, shortcut] of desired.entries()) {
+    const current = fnCommandWatcherConfigs.get(commandId);
+    if (current !== shortcut) {
+      fnCommandWatcherConfigs.set(commandId, shortcut);
+      stopFnCommandWatcher(commandId);
+    }
+    startFnCommandWatcher(commandId, shortcut);
+  }
 }
 
 function ensureWhisperHoldWatcherBinary(): string | null {
@@ -4564,7 +4753,7 @@ async function refineWhisperTranscript(input: string): Promise<{ correctedText: 
 
 // ─── Settings Window ────────────────────────────────────────────────
 
-type SettingsTabId = 'general' | 'ai' | 'extensions';
+type SettingsTabId = 'general' | 'ai' | 'extensions' | 'advanced';
 type SettingsPanelTarget = {
   extensionName?: string;
   commandName?: string;
@@ -4575,7 +4764,7 @@ type SettingsNavigationPayload = {
 };
 
 function normalizeSettingsTabId(input: any): SettingsTabId | undefined {
-  if (input === 'general' || input === 'ai' || input === 'extensions') return input;
+  if (input === 'general' || input === 'ai' || input === 'extensions' || input === 'advanced') return input;
   return undefined;
 }
 
@@ -5305,6 +5494,9 @@ function registerCommandHotkeys(hotkeys: Record<string, string>): void {
     if (commandId === 'system-supercmd-whisper-speak-toggle' && isFnOnlyShortcut(normalizedShortcut)) {
       continue;
     }
+    if (isFnShortcut(normalizedShortcut)) {
+      continue;
+    }
     try {
       const success = globalShortcut.register(normalizedShortcut, async () => {
         await runCommandById(commandId, 'hotkey');
@@ -5316,6 +5508,7 @@ function registerCommandHotkeys(hotkeys: Record<string, string>): void {
   }
 
   syncFnSpeakToggleWatcher(hotkeys);
+  syncFnCommandWatchers(hotkeys);
 }
 
 function registerDevToolsShortcut(): void {
@@ -5709,6 +5902,14 @@ app.whenReady().then(async () => {
     'save-settings',
     async (_event: any, patch: Partial<AppSettings>) => {
       const result = saveSettings(patch);
+      const windowsToNotify = [mainWindow, settingsWindow, extensionStoreWindow, promptWindow]
+        .filter(Boolean) as Array<InstanceType<typeof BrowserWindow>>;
+      for (const win of windowsToNotify) {
+        if (win.isDestroyed()) continue;
+        try {
+          win.webContents.send('settings-updated', result);
+        } catch {}
+      }
       if (patch.commandAliases !== undefined) {
         invalidateCache();
       }
@@ -5723,6 +5924,14 @@ app.whenReady().then(async () => {
       if (patch.openAtLogin !== undefined) {
         applyOpenAtLogin(Boolean(patch.openAtLogin));
       }
+      if (patch.hyperKeyIncludeShift !== undefined) {
+        try {
+          registerGlobalShortcut(result.globalShortcut);
+        } catch {}
+        try {
+          registerCommandHotkeys(result.commandHotkeys);
+        } catch {}
+      }
       // When onboarding completes: hide dock, then start services that were
       // deferred to avoid triggering permission dialogs during onboarding.
       if (patch.hasSeenOnboarding === true) {
@@ -5732,6 +5941,7 @@ app.whenReady().then(async () => {
         }
         startClipboardMonitor();
         syncFnSpeakToggleWatcher(loadSettings().commandHotkeys);
+        syncFnCommandWatchers(loadSettings().commandHotkeys);
       }
       const aiEnabledPatch = patch.ai?.enabled;
       if (aiEnabledPatch === false) {
@@ -5748,6 +5958,7 @@ app.whenReady().then(async () => {
         }
       } else if (aiEnabledPatch === true) {
         syncFnSpeakToggleWatcher(loadSettings().commandHotkeys);
+        syncFnCommandWatchers(loadSettings().commandHotkeys);
       }
       return result;
     }
@@ -5821,11 +6032,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('enable-fn-watcher-for-onboarding', () => {
     fnWatcherOnboardingOverride = true;
     syncFnSpeakToggleWatcher(loadSettings().commandHotkeys);
+    syncFnCommandWatchers(loadSettings().commandHotkeys);
   });
   ipcMain.handle('disable-fn-watcher-for-onboarding', () => {
     fnWatcherOnboardingOverride = false;
     if (!loadSettings().hasSeenOnboarding) {
       stopFnSpeakToggleWatcher();
+      stopAllFnCommandWatchers();
     }
   });
 
@@ -5850,24 +6063,32 @@ app.whenReady().then(async () => {
         for (const [otherCommandId, otherHotkey] of Object.entries(hotkeys)) {
           if (otherCommandId === commandId) continue;
           if (normalizeAccelerator(otherHotkey) === normalizedHotkey) {
-            return { success: false, error: 'duplicate' as const };
+            return { success: false, error: 'duplicate' as const, conflictCommandId: otherCommandId };
           }
         }
 
         const isFnSpeakToggle =
           commandId === 'system-supercmd-whisper-speak-toggle' &&
           isFnOnlyShortcut(normalizedHotkey);
+        const isFnHotkey = isFnShortcut(normalizedHotkey);
 
         // Register the new one
         try {
-          const success = isFnSpeakToggle
-            ? true
-            : globalShortcut.register(normalizedHotkey, async () => {
-                await runCommandById(commandId, 'hotkey');
-              });
+          let success = false;
+          if (isFnSpeakToggle) {
+            success = true;
+          } else if (isFnHotkey) {
+            const fnConfig = parseHoldShortcutConfig(normalizedHotkey);
+            const binaryPath = ensureWhisperHoldWatcherBinary();
+            success = Boolean(fnConfig && fnConfig.fn && binaryPath);
+          } else {
+            success = globalShortcut.register(normalizedHotkey, async () => {
+              await runCommandById(commandId, 'hotkey');
+            });
+          }
           if (!success) {
             // Attempt to restore old mapping if the new one failed.
-            if (oldHotkey) {
+            if (oldHotkey && !isFnHotkey) {
               const normalizedOldHotkey = normalizeAccelerator(oldHotkey);
               try {
                 const restored = globalShortcut.register(normalizedOldHotkey, async () => {
@@ -5881,7 +6102,7 @@ app.whenReady().then(async () => {
             return { success: false, error: 'unavailable' as const };
           }
           hotkeys[commandId] = hotkey;
-          if (!isFnSpeakToggle) {
+          if (!isFnSpeakToggle && !isFnHotkey) {
             registeredHotkeys.set(normalizedHotkey, commandId);
           }
         } catch {
@@ -5893,6 +6114,7 @@ app.whenReady().then(async () => {
 
       saveSettings({ commandHotkeys: hotkeys });
       syncFnSpeakToggleWatcher(hotkeys);
+      syncFnCommandWatchers(hotkeys);
       return { success: true as const };
     }
   );
@@ -8471,6 +8693,7 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   stopWhisperHoldWatcher();
   stopFnSpeakToggleWatcher();
+  stopAllFnCommandWatchers();
   stopSpeakSession({ resetStatus: false });
   stopClipboardMonitor();
   stopSnippetExpander();

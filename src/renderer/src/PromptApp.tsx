@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Loader2, X } from 'lucide-react';
 import { applyAppFontSize, getDefaultAppFontSize } from './utils/font-size';
+import { applyBaseColor } from './utils/base-color';
 
 const NO_AI_MODEL_ERROR = 'No AI model available. Configure one in Settings -> AI.';
 
@@ -106,7 +107,10 @@ const PromptApp: React.FC = () => {
     let disposed = false;
     window.electron.getSettings()
       .then((settings) => {
-        if (!disposed) applyAppFontSize(settings.fontSize);
+        if (!disposed) {
+          applyAppFontSize(settings.fontSize);
+          applyBaseColor(settings.baseColor || '#181818');
+        }
       })
       .catch(() => {
         if (!disposed) applyAppFontSize(getDefaultAppFontSize());
@@ -114,6 +118,14 @@ const PromptApp: React.FC = () => {
     return () => {
       disposed = true;
     };
+  }, []);
+
+  useEffect(() => {
+    const cleanup = window.electron.onSettingsUpdated?.((settings) => {
+      applyAppFontSize(settings.fontSize);
+      applyBaseColor(settings.baseColor || '#181818');
+    });
+    return cleanup;
   }, []);
 
   useEffect(() => {
